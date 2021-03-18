@@ -148,8 +148,16 @@ func editorwriter(g *gocui.Gui, writer io.Writer) func(v *gocui.View, key gocui.
 		switch key {
 		case gocui.KeyEnter:
 			g.Update(func(g *gocui.Gui) error {
-				writer.Write([]byte(v.ViewBuffer()))
+				_, err := writer.Write([]byte(v.ViewBuffer()))
+				if err != nil {
+					return nil // cmd has exited/closed stdin if this fails. makesup should keep running
+				}
 				writer.Write([]byte("\n"))
+				vout, err := g.View("output")
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(vout, ">>> %s\n", v.ViewBuffer())
 				v.Clear()
 				v.SetCursor(0, 0)
 				return nil
