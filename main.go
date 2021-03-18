@@ -39,6 +39,7 @@ func main() {
 	}
 	defer g.Close()
 
+	g.Cursor = true
 	g.Mouse = true
 
 	g.SetManagerFunc(layout)
@@ -54,14 +55,21 @@ func main() {
 func layout(g *gocui.Gui) error {
 	init := false
 	maxX, maxY := g.Size()
-	if vout, err := g.SetView("output", 0, 0, maxX-1, maxY-3, gocui.BOTTOM); err != nil {
+	if v, err := g.SetView("output", 0, 0, maxX-1, maxY-3, gocui.BOTTOM); err != nil {
 		if !gocui.IsUnknownView(err) {
 			return err
 		}
-		vout.Autoscroll = true
-		vout.Wrap = true
+		v.Autoscroll = true
+		v.Wrap = true
 		init = true
 	}
+	if v, err := g.SetView("input", 0, maxY-3, maxX-1, maxY-1, gocui.TOP); err != nil {
+		if !gocui.IsUnknownView(err) {
+			return err
+		}
+		v.Editable = true
+	}
+	g.SetCurrentView("input")
 	if init {
 		if err := initcmd(g); err != nil {
 			return err
@@ -71,13 +79,28 @@ func layout(g *gocui.Gui) error {
 }
 
 func keybinds(g *gocui.Gui) error {
-	if err := g.SetKeybinding("", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+	if err := g.SetKeybinding("input", gocui.KeyCtrlC, gocui.ModNone, quit); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("input", gocui.KeyPgup, gocui.ModNone, scroll(-10)); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("input", gocui.KeyArrowUp, gocui.ModNone, scroll(-1)); err != nil {
 		return err
 	}
 	if err := g.SetKeybinding("", gocui.MouseWheelUp, gocui.ModNone, scroll(-1)); err != nil {
 		return err
 	}
+	if err := g.SetKeybinding("input", gocui.KeyPgdn, gocui.ModNone, scroll(10)); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("input", gocui.KeyArrowDown, gocui.ModNone, scroll(1)); err != nil {
+		return err
+	}
 	if err := g.SetKeybinding("", gocui.MouseWheelDown, gocui.ModNone, scroll(1)); err != nil {
+		return err
+	}
+	if err := g.SetKeybinding("input", gocui.KeyCtrlSpace, gocui.ModNone, scroll(0)); err != nil {
 		return err
 	}
 	if err := g.SetKeybinding("", gocui.MouseMiddle, gocui.ModNone, scroll(0)); err != nil {
@@ -100,7 +123,11 @@ func scroll(n int) func(g *gocui.Gui, v *gocui.View) error {
 		v.Autoscroll = false
 		v.Title = "scrolling"
 		_, y := v.Origin()
-		v.SetOrigin(0, y+n)
+		y += n
+		if y < 0 {
+			y = 0
+		}
+		v.SetOrigin(0, y)
 		return nil
 	}
 }
@@ -116,11 +143,31 @@ func updateView(buffer [512]byte, n int) func(g *gocui.Gui) error {
 	}
 }
 
+func editorwriter(g *gocui.Gui, writer io.Writer) func(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) {
+	return func(v *gocui.View, key gocui.Key, ch rune, mod gocui.Modifier) {
+		switch key {
+		case gocui.KeyEnter:
+			g.Update(func(g *gocui.Gui) error {
+				writer.Write([]byte(v.ViewBuffer()))
+				writer.Write([]byte("\n"))
+				v.Clear()
+				v.SetCursor(0, 0)
+				return nil
+			})
+		default:
+			gocui.DefaultEditor.Edit(v, key, ch, mod)
+		}
+	}
+}
+
 func initcmd(g *gocui.Gui) error {
 	reader, writer := io.Pipe()
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	cmd.Stdin = nil
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
 	go func() {
 		var buffer [512]byte
 		var n int
@@ -130,7 +177,15 @@ func initcmd(g *gocui.Gui) error {
 			g.Update(updateView(buffer, n))
 		}
 	}()
-	err := cmd.Start()
+	g.Update(func(g *gocui.Gui) error {
+		vin, err := g.View("input")
+		if err != nil {
+			return err
+		}
+		vin.Editor = gocui.EditorFunc(editorwriter(g, stdin))
+		return nil
+	})
+	err = cmd.Start()
 	if err != nil {
 		return err
 	}
