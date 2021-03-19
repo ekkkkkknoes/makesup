@@ -1,5 +1,5 @@
 BIN=makesup
-SRC=main.go
+SRC=cmd.go  editor.go  keybinds.go  layout.go  main.go
 
 .PHONY: all clean
 
